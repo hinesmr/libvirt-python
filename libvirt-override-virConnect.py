@@ -38,7 +38,7 @@
         """
         try:
             for cb,opaque in self.domainEventCallbacks.items():
-                cb(self,dom,event,detail,opaque)
+                cb(self, virDomain(self, _obj=dom), event, detail, opaque)
             return 0
         except AttributeError:
             pass
@@ -113,14 +113,14 @@
            authScheme, subject, opaque)
         return 0
 
-    def _dispatchDomainEventBlockPullCallback(self, dom, path, type, status, cbData):
-        """Dispatches events to python user domain blockJob event callbacks
+    def _dispatchDomainEventBlockJobCallback(self, dom, disk, type, status, cbData):
+        """Dispatches events to python user domain blockJob/blockJob2 event callbacks
         """
         try:
             cb = cbData["cb"]
             opaque = cbData["opaque"]
 
-            cb(self, virDomain(self, _obj=dom), path, type, status, opaque)
+            cb(self, virDomain(self, _obj=dom), disk, type, status, opaque)
             return 0
         except AttributeError:
             pass
@@ -188,6 +188,34 @@
         cb(self, virDomain(self, _obj=dom), devAlias, opaque)
         return 0
 
+    def _dispatchDomainEventTunableCallback(self, dom, params, cbData):
+        """Dispatches event to python user domain tunable event callbacks
+        """
+        cb = cbData["cb"]
+        opaque = cbData["opaque"]
+
+        cb(self, virDomain(self, _obj=dom), params, opaque)
+        return 0
+
+    def _dispatchDomainEventAgentLifecycleCallback(self, dom, state, reason, cbData):
+        """Dispatches event to python user domain agent lifecycle event callback
+        """
+
+        cb = cbData["cb"]
+        opaque = cbData["opaque"]
+
+        cb(self, virDomain(self, _obj=dom), state, reason, opaque)
+        return 0
+
+    def _dispatchDomainEventDeviceAddedCallback(self, dom, devAlias, cbData):
+        """Dispatches event to python user domain device added event callbacks
+        """
+        cb = cbData["cb"]
+        opaque = cbData["opaque"]
+
+        cb(self, virDomain(self, _obj=dom), devAlias, opaque)
+        return 0
+
     def domainEventDeregisterAny(self, callbackID):
         """Removes a Domain Event Callback. De-registering for a
            domain callback will disable delivery of this event type """
@@ -197,6 +225,40 @@
             del self.domainEventCallbackID[callbackID]
         except AttributeError:
             pass
+
+    def _dispatchNetworkEventLifecycleCallback(self, net, event, detail, cbData):
+        """Dispatches events to python user network lifecycle event callbacks
+        """
+        cb = cbData["cb"]
+        opaque = cbData["opaque"]
+
+        cb(self, virNetwork(self, _obj=net), event, detail, opaque)
+        return 0
+
+    def networkEventDeregisterAny(self, callbackID):
+        """Removes a Network Event Callback. De-registering for a
+           network callback will disable delivery of this event type"""
+        try:
+            ret = libvirtmod.virConnectNetworkEventDeregisterAny(self._o, callbackID)
+            if ret == -1: raise libvirtError ('virConnectNetworkEventDeregisterAny() failed', conn=self)
+            del self.networkEventCallbackID[callbackID]
+        except AttributeError:
+            pass
+
+    def networkEventRegisterAny(self, net, eventID, cb, opaque):
+        """Adds a Network Event Callback. Registering for a network
+           callback will enable delivery of the events"""
+        if not hasattr(self, 'networkEventCallbackID'):
+            self.networkEventCallbackID = {}
+        cbData = { "cb": cb, "conn": self, "opaque": opaque }
+        if net is None:
+            ret = libvirtmod.virConnectNetworkEventRegisterAny(self._o, None, eventID, cbData)
+        else:
+            ret = libvirtmod.virConnectNetworkEventRegisterAny(self._o, net._o, eventID, cbData)
+        if ret == -1:
+            raise libvirtError ('virConnectNetworkEventRegisterAny() failed', conn=self)
+        self.networkEventCallbackID[ret] = opaque
+        return ret
 
     def domainEventRegisterAny(self, dom, eventID, cb, opaque):
         """Adds a Domain Event Callback. Registering for a domain
@@ -349,3 +411,103 @@
         if ret is None:raise libvirtError('virDomainCreateXMLWithFiles() failed', conn=self)
         __tmp = virDomain(self,_obj=ret)
         return __tmp
+
+    def getAllDomainStats(self, stats = 0, flags=0):
+        """Query statistics for all domains on a given connection.
+
+        Report statistics of various parameters for a running VM according to @stats
+        field. The statistics are returned as an array of structures for each queried
+        domain. The structure contains an array of typed parameters containing the
+        individual statistics. The typed parameter name for each statistic field
+        consists of a dot-separated string containing name of the requested group
+        followed by a group specific description of the statistic value.
+
+        The statistic groups are enabled using the @stats parameter which is a
+        binary-OR of enum virDomainStatsTypes. The following groups are available
+        (although not necessarily implemented for each hypervisor):
+
+        VIR_DOMAIN_STATS_STATE: Return domain state and reason for entering that
+        state. The typed parameter keys are in this format:
+        "state.state" - state of the VM, returned as int from virDomainState enum
+        "state.reason" - reason for entering given state, returned as int from
+                         virDomain*Reason enum corresponding to given state.
+
+        Using 0 for @stats returns all stats groups supported by the given
+        hypervisor.
+
+        Specifying VIR_CONNECT_GET_ALL_DOMAINS_STATS_ENFORCE_STATS as @flags makes
+        the function return error in case some of the stat types in @stats were
+        not recognized by the daemon.
+
+        Similarly to virConnectListAllDomains, @flags can contain various flags to
+        filter the list of domains to provide stats for.
+
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_ACTIVE selects online domains while
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_INACTIVE selects offline ones.
+
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_PERSISTENT and
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_TRANSIENT allow to filter the list
+        according to their persistence.
+
+        To filter the list of VMs by domain state @flags can contain
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_RUNNING,
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_PAUSED,
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_SHUTOFF and/or
+        VIR_CONNECT_GET_ALL_DOMAINS_STATS_OTHER for all other states. """
+        ret = libvirtmod.virConnectGetAllDomainStats(self._o, stats, flags)
+        if ret is None:
+            raise libvirtError("virConnectGetAllDomainStats() failed", conn=self)
+
+        retlist = list()
+        for elem in ret:
+            record = (virDomain(self, _obj=elem[0]) , elem[1])
+            retlist.append(record)
+
+        return retlist
+
+    def domainListGetStats(self, doms, stats=0, flags=0):
+        """ Query statistics for given domains.
+
+        Report statistics of various parameters for a running VM according to @stats
+        field. The statistics are returned as an array of structures for each queried
+        domain. The structure contains an array of typed parameters containing the
+        individual statistics. The typed parameter name for each statistic field
+        consists of a dot-separated string containing name of the requested group
+        followed by a group specific description of the statistic value.
+
+        The statistic groups are enabled using the @stats parameter which is a
+        binary-OR of enum virDomainStatsTypes. The following groups are available
+        (although not necessarily implemented for each hypervisor):
+
+        VIR_DOMAIN_STATS_STATE: Return domain state and reason for entering that
+        state. The typed parameter keys are in this format:
+        "state.state" - state of the VM, returned as int from virDomainState enum
+        "state.reason" - reason for entering given state, returned as int from
+                         virDomain*Reason enum corresponding to given state.
+
+        Using 0 for @stats returns all stats groups supported by the given
+        hypervisor.
+
+        Specifying VIR_CONNECT_GET_ALL_DOMAINS_STATS_ENFORCE_STATS as @flags makes
+        the function return error in case some of the stat types in @stats were
+        not recognized by the daemon.
+
+        Get statistics about domains provided as a list in @doms. @stats is
+        a bit field selecting requested statistics types."""
+        domlist = list()
+        for dom in doms:
+            if not isinstance(dom, virDomain):
+                raise libvirtError("domain list contains non-domain elements", conn=self)
+
+            domlist.append(dom._o)
+
+        ret = libvirtmod.virDomainListGetStats(self._o, domlist, stats, flags)
+        if ret is None:
+            raise libvirtError("virDomainListGetStats() failed", conn=self)
+
+        retlist = list()
+        for elem in ret:
+            record = (virDomain(self, _obj=elem[0]) , elem[1])
+            retlist.append(record)
+
+        return retlist

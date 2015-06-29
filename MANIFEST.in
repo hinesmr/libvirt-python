@@ -4,12 +4,15 @@ include COPYING
 include COPYING.LESSER
 include ChangeLog
 include examples/consolecallback.py
+include examples/domipaddrs.py
 include examples/dominfo.py
 include examples/domrestore.py
 include examples/domsave.py
 include examples/domstart.py
 include examples/esxlist.py
 include examples/event-test.py
+include examples/guest-vcpus/guest-vcpu-daemon.py
+include examples/guest-vcpus/guest-vcpu.py
 include examples/topology.py
 include generator.py
 include libvirt-lxc-override-api.xml
@@ -31,5 +34,8 @@ include MANIFEST
 include README
 include sanitytest.py
 include setup.py
+include tests/test_conn.py
+include tests/test_domain.py
+include tox.ini
 include typewrappers.c
 include typewrappers.h

@@ -47,3 +47,28 @@
         ret = libvirtmod.virDomainCreateWithFiles(self._o, files, flags)
         if ret == -1: raise libvirtError ('virDomainCreateWithFiles() failed', dom=self)
         return ret
+
+    def fsFreeze(self, mountpoints=None, flags=0):
+        """Freeze specified filesystems within the guest """
+        ret = libvirtmod.virDomainFSFreeze(self._o, mountpoints, flags)
+        if ret == -1: raise libvirtError ('virDomainFSFreeze() failed', dom=self)
+        return ret
+
+    def fsThaw(self, mountpoints=None, flags=0):
+        """Thaw specified filesystems within the guest """
+        ret = libvirtmod.virDomainFSThaw(self._o, mountpoints, flags)
+        if ret == -1: raise libvirtError ('virDomainFSThaw() failed', dom=self)
+        return ret
+
+    def getTime(self, flags=0):
+        """Extract information about guest time """
+        ret = libvirtmod.virDomainGetTime(self._o, flags)
+        if ret == -1: raise libvirtError ('virDomainGetTime() failed', dom=self)
+        return ret
+
+    def setTime(self, time=None, flags=0):
+        """Set guest time to the given value. @time is a dict containing
+        'seconds' field for seconds and 'nseconds' field for nanoseconds """
+        ret = libvirtmod.virDomainSetTime(self._o, time, flags)
+        if ret == -1: raise libvirtError ('virDomainSetTime() failed', dom=self)
+        return ret

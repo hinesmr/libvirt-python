@@ -2,3 +2,8 @@ build/
 dist/
 MANIFEST
 *~
+*#*#
+*.#*#
+*.pyc
+tags
+.tox

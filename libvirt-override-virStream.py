@@ -28,7 +28,7 @@
     def recvAll(self, handler, opaque):
         """Receive the entire data stream, sending the data to the
         requested data sink. This is simply a convenient alternative
-        to virStreamRecv, for apps that do blocking-I/o.
+        to virStreamRecv, for apps that do blocking-I/O.
 
         A hypothetical handler function looks like:
 
@@ -50,7 +50,8 @@
                 ret = handler(self, got, opaque)
                 if type(ret) is int and ret < 0:
                     raise RuntimeError("recvAll handler returned %d" % ret)
-            except Exception, e:
+            except Exception:
+                e = sys.exc_info()[1]
                 try:
                     self.abort()
                 except:
@@ -61,7 +62,7 @@
         """
         Send the entire data stream, reading the data from the
         requested data source. This is simply a convenient alternative
-        to virStreamSend, for apps that do blocking-I/o.
+        to virStreamSend, for apps that do blocking-I/O.
 
         A hypothetical handler function looks like:
 
@@ -75,6 +76,7 @@
             try:
                 got = handler(self, 1024*64, opaque)
             except:
+                e = sys.exc_info()[1]
                 try:
                     self.abort()
                 except:
@@ -120,6 +122,6 @@
         with the call, but may instead be delayed until a
         subsequent call.
         """
-        ret = libvirtmod.virStreamSend(self._o, data, len(data))
+        ret = libvirtmod.virStreamSend(self._o, data)
         if ret == -1: raise libvirtError ('virStreamSend() failed')
         return ret

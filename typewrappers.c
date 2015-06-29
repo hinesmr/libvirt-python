@@ -39,7 +39,23 @@ PyObject *
 libvirt_intWrap(int val)
 {
     PyObject *ret;
+#if PY_MAJOR_VERSION > 2
+    ret = PyLong_FromLong((long) val);
+#else
     ret = PyInt_FromLong((long) val);
+#endif
+    return ret;
+}
+
+PyObject *
+libvirt_uintWrap(uint val)
+{
+    PyObject *ret;
+#if PY_MAJOR_VERSION > 2
+    ret = PyLong_FromLong((long) val);
+#else
+    ret = PyInt_FromLong((long) val);
+#endif
     return ret;
 }
 
@@ -47,7 +63,7 @@ PyObject *
 libvirt_longWrap(long val)
 {
     PyObject *ret;
-    ret = PyInt_FromLong(val);
+    ret = PyLong_FromLong(val);
     return ret;
 }
 
@@ -63,7 +79,7 @@ PyObject *
 libvirt_longlongWrap(long long val)
 {
     PyObject *ret;
-    ret = PyLong_FromUnsignedLongLong((unsigned long long) val);
+    ret = PyLong_FromLongLong(val);
     return ret;
 }
 
@@ -84,8 +100,11 @@ libvirt_charPtrSizeWrap(char *str, Py_ssize_t size)
         Py_INCREF(Py_None);
         return Py_None;
     }
+#if PY_MAJOR_VERSION > 2
+    ret = PyBytes_FromStringAndSize(str, size);
+#else
     ret = PyString_FromStringAndSize(str, size);
-    VIR_FREE(str);
+#endif
     return ret;
 }
 
@@ -98,8 +117,11 @@ libvirt_charPtrWrap(char *str)
         Py_INCREF(Py_None);
         return Py_None;
     }
+#if PY_MAJOR_VERSION > 2
+    ret = PyUnicode_FromString(str);
+#else
     ret = PyString_FromString(str);
-    VIR_FREE(str);
+#endif
     return ret;
 }
 
@@ -112,7 +134,11 @@ libvirt_constcharPtrWrap(const char *str)
         Py_INCREF(Py_None);
         return Py_None;
     }
+#if PY_MAJOR_VERSION > 2
+    ret = PyUnicode_FromString(str);
+#else
     ret = PyString_FromString(str);
+#endif
     return ret;
 }
 
@@ -139,7 +165,11 @@ libvirt_intUnwrap(PyObject *obj, int *val)
      * to C long type directly. If it is of PyLong_Type, PyInt_AsLong
      * will call PyLong_AsLong() to deal with it automatically.
      */
+#if PY_MAJOR_VERSION > 2
+    long_val = PyLong_AsLong(obj);
+#else
     long_val = PyInt_AsLong(obj);
+#endif
     if ((long_val == -1) && PyErr_Occurred())
         return -1;
 
@@ -167,7 +197,11 @@ libvirt_uintUnwrap(PyObject *obj, unsigned int *val)
         return -1;
     }
 
+#if PY_MAJOR_VERSION > 2
+    long_val = PyLong_AsLong(obj);
+#else
     long_val = PyInt_AsLong(obj);
+#endif
     if ((long_val == -1) && PyErr_Occurred())
         return -1;
 
@@ -191,7 +225,7 @@ libvirt_longUnwrap(PyObject *obj, long *val)
         return -1;
     }
 
-    long_val = PyInt_AsLong(obj);
+    long_val = PyLong_AsLong(obj);
     if ((long_val == -1) && PyErr_Occurred())
         return -1;
 
@@ -209,7 +243,7 @@ libvirt_ulongUnwrap(PyObject *obj, unsigned long *val)
         return -1;
     }
 
-    long_val = PyInt_AsLong(obj);
+    long_val = PyLong_AsLong(obj);
     if ((long_val == -1) && PyErr_Occurred())
         return -1;
 
@@ -233,10 +267,14 @@ libvirt_longlongUnwrap(PyObject *obj, long long *val)
         return -1;
     }
 
+#if PY_MAJOR_VERSION == 2
     /* If obj is of PyInt_Type, PyLong_AsLongLong
      * will call PyInt_AsLong() to handle it automatically.
      */
     if (PyInt_Check(obj) || PyLong_Check(obj))
+#else
+    if (PyLong_Check(obj))
+#endif
         llong_val = PyLong_AsLongLong(obj);
     else
         PyErr_SetString(PyExc_TypeError, "an integer is required");
@@ -252,24 +290,27 @@ int
 libvirt_ulonglongUnwrap(PyObject *obj, unsigned long long *val)
 {
     unsigned long long ullong_val = -1;
-    long long llong_val;
 
     if (!obj) {
         PyErr_SetString(PyExc_TypeError, "unexpected type");
         return -1;
     }
 
+#if PY_MAJOR_VERSION == 2
     /* The PyLong_AsUnsignedLongLong doesn't check the type of
      * obj, only accept argument of PyLong_Type, so we check it instead.
      */
     if (PyInt_Check(obj)) {
-        llong_val = PyInt_AsLong(obj);
+        long long llong_val = PyInt_AsLong(obj);
         if (llong_val < 0)
             PyErr_SetString(PyExc_OverflowError,
                             "negative Python int cannot be converted to C unsigned long long");
         else
             ullong_val = llong_val;
     } else if (PyLong_Check(obj)) {
+#else
+    if (PyLong_Check(obj)) {
+#endif
         ullong_val = PyLong_AsUnsignedLongLong(obj);
     } else {
         PyErr_SetString(PyExc_TypeError, "an integer is required");
@@ -315,6 +356,61 @@ libvirt_boolUnwrap(PyObject *obj, bool *val)
 
     *val = ret > 0;
     return 0;
+}
+
+int
+libvirt_charPtrUnwrap(PyObject *obj, char **str)
+{
+#if PY_MAJOR_VERSION > 2
+    PyObject *bytes;
+#endif
+    const char *ret;
+    *str = NULL;
+    if (!obj) {
+        PyErr_SetString(PyExc_TypeError, "unexpected type");
+        return -1;
+    }
+
+#if PY_MAJOR_VERSION > 2
+    if (!(bytes = PyUnicode_AsUTF8String(obj)))
+        return -1;
+    ret = PyBytes_AsString(bytes);
+#else
+    ret = PyString_AsString(obj);
+#endif
+    if (ret)
+        *str = strdup(ret);
+#if PY_MAJOR_VERSION > 2
+    Py_DECREF(bytes);
+#endif
+    return ret && *str ? 0 : -1;
+}
+
+int libvirt_charPtrSizeUnwrap(PyObject *obj, char **str, Py_ssize_t *size)
+{
+    int ret;
+#if PY_MAJOR_VERSION == 2 && PY_MINOR_VERSION <= 4
+    int isize;
+#endif
+    *str = NULL;
+    *size = 0;
+    if (!obj) {
+        PyErr_SetString(PyExc_TypeError, "unexpected type");
+        return -1;
+    }
+
+#if PY_MAJOR_VERSION > 2
+    ret = PyBytes_AsStringAndSize(obj, str, size);
+#else
+# if PY_MINOR_VERSION <= 4
+    ret = PyString_AsStringAndSize(obj, str, &isize);
+    *size = isize;
+# else
+    ret = PyString_AsStringAndSize(obj, str, size);
+# endif
+#endif
+
+    return ret;
 }
 
 PyObject *

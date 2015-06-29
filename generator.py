@@ -9,6 +9,8 @@ qemu_functions = {}
 enums = {} # { enumType: { enumConstant: enumValue } }
 lxc_enums = {} # { enumType: { enumConstant: enumValue } }
 qemu_enums = {} # { enumType: { enumConstant: enumValue } }
+event_ids = []
+params = [] # [ (parameName, paramValue)... ]
 
 import os
 import sys
@@ -29,6 +31,21 @@ import xml.sax
 debug = 0
 onlyOverrides = False
 
+libvirt_headers = [
+    "libvirt",
+    "libvirt-domain",
+    "libvirt-domain-snapshot",
+    "libvirt-event",
+    "libvirt-host",
+    "libvirt-interface",
+    "libvirt-network",
+    "libvirt-nodedev",
+    "libvirt-nwfilter",
+    "libvirt-secret",
+    "libvirt-storage",
+    "libvirt-stream",
+]
+
 def getparser():
     # Attach parser to an unmarshalling object. return both objects.
     target = docParser()
@@ -48,24 +65,24 @@ class docParser(xml.sax.handler.ContentHandler):
 
     def close(self):
         if debug:
-            print "close"
+            print("close")
 
     def getmethodname(self):
         return self._methodname
 
     def data(self, text):
         if debug:
-            print "data %s" % text
+            print("data %s" % text)
         self._data.append(text)
 
     def cdata(self, text):
         if debug:
-            print "data %s" % text
+            print("data %s" % text)
         self._data.append(text)
 
     def start(self, tag, attrs):
         if debug:
-            print "start %s, %s" % (tag, attrs)
+            print("start %s, %s" % (tag, attrs))
         if tag == 'function':
             self._data = []
             self.in_function = 1
@@ -76,11 +93,11 @@ class docParser(xml.sax.handler.ContentHandler):
             self.function_return = None
             self.function_file = None
             self.function_module= None
-            if attrs.has_key('name'):
+            if 'name' in attrs.keys():
                 self.function = attrs['name']
-            if attrs.has_key('file'):
+            if 'file' in attrs.keys():
                 self.function_file = attrs['file']
-            if attrs.has_key('module'):
+            if 'module' in attrs.keys():
                 self.function_module= attrs['module']
         elif tag == 'cond':
             self._data = []
@@ -91,44 +108,45 @@ class docParser(xml.sax.handler.ContentHandler):
                 self.function_arg_name = None
                 self.function_arg_type = None
                 self.function_arg_info = None
-                if attrs.has_key('name'):
+                if 'name' in attrs.keys():
                     self.function_arg_name = attrs['name']
                     if self.function_arg_name == 'from':
                         self.function_arg_name = 'frm'
-                if attrs.has_key('type'):
+                if 'type' in attrs.keys():
                     self.function_arg_type = attrs['type']
-                if attrs.has_key('info'):
+                if 'info' in attrs.keys():
                     self.function_arg_info = attrs['info']
         elif tag == 'return':
             if self.in_function == 1:
                 self.function_return_type = None
                 self.function_return_info = None
                 self.function_return_field = None
-                if attrs.has_key('type'):
+                if 'type' in attrs.keys():
                     self.function_return_type = attrs['type']
-                if attrs.has_key('info'):
+                if 'info' in attrs.keys():
                     self.function_return_info = attrs['info']
-                if attrs.has_key('field'):
+                if 'field' in attrs.keys():
                     self.function_return_field = attrs['field']
         elif tag == 'enum':
             # enums come from header files, hence virterror.h
-            if (attrs['file'] == "libvirt" or
-                attrs['file'] == "virterror"):
+            if attrs['file'] in libvirt_headers + ["virerror", "virterror"]:
                 enum(attrs['type'],attrs['name'],attrs['value'])
             elif attrs['file'] == "libvirt-lxc":
                 lxc_enum(attrs['type'],attrs['name'],attrs['value'])
             elif attrs['file'] == "libvirt-qemu":
                 qemu_enum(attrs['type'],attrs['name'],attrs['value'])
+        elif tag == "macro":
+            if "string" in attrs:
+                params.append((attrs['name'], attrs['string']))
 
     def end(self, tag):
         if debug:
-            print "end %s" % tag
+            print("end %s" % tag)
         if tag == 'function':
             # fuctions come from source files, hence 'virerror.c'
             if self.function is not None:
-                if (self.function_module == "libvirt" or
-                    self.function_module == "virevent" or
-                    self.function_module == "virerror"):
+                if self.function_module in libvirt_headers + \
+                            ["event", "virevent", "virerror", "virterror"]:
                     function(self.function, self.function_descr,
                              self.function_return, self.function_args,
                              self.function_file, self.function_module,
@@ -184,23 +202,31 @@ class docParser(xml.sax.handler.ContentHandler):
 
 
 def function(name, desc, ret, args, file, module, cond):
+    global onlyOverrides
     if onlyOverrides and name not in functions:
         return
+    if name == "virConnectListDomains":
+        name = "virConnectListDomainsID"
     functions[name] = (desc, ret, args, file, module, cond)
 
 def qemu_function(name, desc, ret, args, file, module, cond):
+    global onlyOverrides
     if onlyOverrides and name not in qemu_functions:
         return
     qemu_functions[name] = (desc, ret, args, file, module, cond)
 
 def lxc_function(name, desc, ret, args, file, module, cond):
+    global onlyOverrides
     if onlyOverrides and name not in lxc_functions:
         return
     lxc_functions[name] = (desc, ret, args, file, module, cond)
 
 def enum(type, name, value):
-    if not enums.has_key(type):
+    if type not in enums:
         enums[type] = {}
+    if (name.startswith('VIR_DOMAIN_EVENT_ID_') or
+        name.startswith('VIR_NETWORK_EVENT_ID_')):
+        event_ids.append(name)
     if value == 'VIR_TYPED_PARAM_INT':
         value = 1
     elif value == 'VIR_TYPED_PARAM_UINT':
@@ -219,20 +245,19 @@ def enum(type, name, value):
         value = 1
     elif value == 'VIR_DOMAIN_AFFECT_CONFIG':
         value = 2
-    if name[-5:] != '_LAST':
-        if onlyOverrides and name not in enums[type]:
-            return
-        enums[type][name] = value
+    if onlyOverrides and name not in enums[type]:
+        return
+    enums[type][name] = value
 
 def lxc_enum(type, name, value):
-    if not lxc_enums.has_key(type):
+    if type not in lxc_enums:
         lxc_enums[type] = {}
     if onlyOverrides and name not in lxc_enums[type]:
         return
     lxc_enums[type][name] = value
 
 def qemu_enum(type, name, value):
-    if not qemu_enums.has_key(type):
+    if type not in qemu_enums:
         qemu_enums[type] = {}
     if onlyOverrides and name not in qemu_enums[type]:
         return
@@ -266,6 +291,7 @@ skipped_types = {
      'virConnectDomainEventWatchdogCallback': "No function types in python",
      'virConnectDomainEventIOErrorCallback': "No function types in python",
      'virConnectDomainEventGraphicsCallback': "No function types in python",
+     'virConnectDomainQemuMonitorEventCallback': "No function types in python",
      'virStreamEventCallback': "No function types in python",
      'virEventHandleCallback': "No function types in python",
      'virEventTimeoutCallback': "No function types in python",
@@ -284,7 +310,7 @@ py_types = {
     'int':  ('i', None, "int", "int"),
     'long':  ('l', None, "long", "long"),
     'double':  ('d', None, "double", "double"),
-    'unsigned int':  ('i', None, "int", "int"),
+    'unsigned int':  ('I', None, "int", "int"),
     'unsigned long':  ('l', None, "long", "long"),
     'long long':  ('L', None, "longlong", "long long"),
     'unsigned long long':  ('L', None, "longlong", "long long"),
@@ -413,6 +439,8 @@ skip_impl = (
     'virDomainGetVcpuPinInfo',
     'virDomainGetEmulatorPinInfo',
     'virDomainPinEmulator',
+    'virDomainGetIOThreadInfo',
+    'virDomainPinIOThread',
     'virSecretGetValue',
     'virSecretSetValue',
     'virSecretGetUUID',
@@ -454,6 +482,12 @@ skip_impl = (
     'virDomainMigrate3',
     'virDomainMigrateToURI3',
     'virConnectGetCPUModelNames',
+    'virNodeGetFreePages',
+    'virNetworkGetDHCPLeases',
+    'virDomainBlockCopy',
+    'virNodeAllocPages',
+    'virDomainGetFSInfo',
+    'virDomainInterfaceAddresses',
 )
 
 lxc_skip_impl = (
@@ -483,6 +517,8 @@ skip_function = (
     'virConnectDomainEventDeregister', # overridden in virConnect.py
     'virConnectDomainEventRegisterAny',   # overridden in virConnect.py
     'virConnectDomainEventDeregisterAny', # overridden in virConnect.py
+    'virConnectNetworkEventRegisterAny',   # overridden in virConnect.py
+    'virConnectNetworkEventDeregisterAny', # overridden in virConnect.py
     'virSaveLastError', # We have our own python error wrapper
     'virFreeError', # Only needed if we use virSaveLastError
     'virConnectListAllDomains', # overridden in virConnect.py
@@ -495,6 +531,8 @@ skip_function = (
     'virConnectListAllNodeDevices', # overridden in virConnect.py
     'virConnectListAllNWFilters', # overridden in virConnect.py
     'virConnectListAllSecrets', # overridden in virConnect.py
+    'virConnectGetAllDomainStats', # overridden in virConnect.py
+    'virDomainListGetStats', # overriden in virConnect.py
 
     'virStreamRecvAll', # Pure python libvirt-override-virStream.py
     'virStreamSendAll', # Pure python libvirt-override-virStream.py
@@ -506,6 +544,11 @@ skip_function = (
 
     'virDomainCreateXMLWithFiles', # overridden in virConnect.py
     'virDomainCreateWithFiles', # overridden in virDomain.py
+
+    'virDomainFSFreeze', # overridden in virDomain.py
+    'virDomainFSThaw', # overridden in virDomain.py
+    'virDomainGetTime', # overridden in virDomain.py
+    'virDomainSetTime', # overridden in virDomain.py
 
     # 'Ref' functions have no use for bindings users.
     "virConnectRef",
@@ -552,6 +595,12 @@ skip_function = (
     "virTypedParamsGetString",
     "virTypedParamsGetUInt",
     "virTypedParamsGetULLong",
+
+    'virNetworkDHCPLeaseFree', # only useful in C, python code uses list
+    'virDomainStatsRecordListFree', # only useful in C, python uses dict
+    'virDomainFSInfoFree', # only useful in C, python code uses list
+    'virDomainIOThreadInfoFree', # only useful in C, python code uses list
+    'virDomainInterfaceFree', # only useful in C, python code uses list
 )
 
 lxc_skip_function = (
@@ -560,6 +609,8 @@ lxc_skip_function = (
 )
 qemu_skip_function = (
     #"virDomainQemuAttach",
+    'virConnectDomainQemuMonitorEventRegister', # overridden in -qemu.py
+    'virConnectDomainQemuMonitorEventDeregister', # overridden in -qemu.py
 )
 
 # Generate C code, but skip python impl
@@ -592,10 +643,10 @@ def print_function_wrapper(module, name, output, export, include):
         if module == "libvirt-qemu":
             (desc, ret, args, file, mod, cond) = qemu_functions[name]
     except:
-        print "failed to get function %s infos" % name
+        print("failed to get function %s infos" % name)
         return
 
-    if skipped_modules.has_key(module):
+    if module in skipped_modules:
         return 0
 
     if module == "libvirt":
@@ -629,7 +680,7 @@ def print_function_wrapper(module, name, output, export, include):
         if arg[1][0:6] == "const ":
             arg[1] = arg[1][6:]
         c_args = c_args + "    %s %s;\n" % (arg[1], arg[0])
-        if py_types.has_key(arg[1]):
+        if arg[1] in py_types:
             (f, t, n, c) = py_types[arg[1]]
             if (f == 'z') and (name in foreign_encoding_args) and (num_bufs == 0):
                 f = 't#'
@@ -651,9 +702,9 @@ def print_function_wrapper(module, name, output, export, include):
                 c_call = c_call + ", "
             c_call = c_call + "%s" % (arg[0])
         else:
-            if skipped_types.has_key(arg[1]):
+            if arg[1] in skipped_types:
                 return 0
-            if unknown_types.has_key(arg[1]):
+            if arg[1] in unknown_types:
                 lst = unknown_types[arg[1]]
                 lst.append(name)
             else:
@@ -675,7 +726,7 @@ def print_function_wrapper(module, name, output, export, include):
         else:
             c_call = "\n    %s(%s);\n" % (name, c_call)
         ret_convert = "    Py_INCREF(Py_None);\n    return Py_None;\n"
-    elif py_types.has_key(ret[0]):
+    elif ret[0] in py_types:
         (f, t, n, c) = py_types[ret[0]]
         c_return = "    %s c_retval;\n" % (ret[0])
         if file == "python_accessor" and ret[2] is not None:
@@ -683,17 +734,21 @@ def print_function_wrapper(module, name, output, export, include):
         else:
             c_call = "\n    c_retval = %s(%s);\n" % (name, c_call)
         ret_convert = "    py_retval = libvirt_%sWrap((%s) c_retval);\n" % (n,c)
+        if n == "charPtr":
+            ret_convert = ret_convert + "    free(c_retval);\n"
         ret_convert = ret_convert + "    return py_retval;\n"
-    elif py_return_types.has_key(ret[0]):
+    elif ret[0] in py_return_types:
         (f, t, n, c) = py_return_types[ret[0]]
         c_return = "    %s c_retval;\n" % (ret[0])
         c_call = "\n    c_retval = %s(%s);\n" % (name, c_call)
         ret_convert = "    py_retval = libvirt_%sWrap((%s) c_retval);\n" % (n,c)
+        if n == "charPtr":
+            ret_convert = ret_convert + "    free(c_retval);\n"
         ret_convert = ret_convert + "    return py_retval;\n"
     else:
-        if skipped_types.has_key(ret[0]):
+        if ret[0] in skipped_types:
             return 0
-        if unknown_types.has_key(ret[0]):
+        if ret[0] in unknown_types:
             lst = unknown_types[ret[0]]
             lst.append(name)
         else:
@@ -779,13 +834,35 @@ def print_function_wrapper(module, name, output, export, include):
             return 0
     return 1
 
+def print_c_pointer(classname, output, export, include):
+    output.write("PyObject *\n")
+    output.write("libvirt_%s_pointer(PyObject *self ATTRIBUTE_UNUSED, PyObject *args)\n" % classname)
+    output.write("{\n")
+    output.write("    %sPtr ptr;\n" % classname)
+    output.write("    PyObject *pyptr;\n")
+    output.write("    PyObject *pylong;\n")
+    output.write("\n")
+    output.write("    if (!PyArg_ParseTuple(args, (char *) \"O\", &pyptr))\n")
+    output.write("        return NULL;\n")
+    output.write("    ptr = (%sPtr) Py%s_Get(pyptr);\n" % (classname, classname))
+    output.write("    pylong = PyLong_FromVoidPtr(ptr);\n")
+    output.write("    return pylong;\n")
+    output.write("}\n")
+    output.write("\n")
+
+    include.write("PyObject *libvirt_%s_pointer(PyObject *self, PyObject *args);\n" % classname)
+
+    export.write("    { (char *)\"%s_pointer\", libvirt_%s_pointer, METH_VARARGS, NULL },\n" %
+                 (classname, classname))
+
 def buildStubs(module, api_xml):
     global py_types
     global py_return_types
     global unknown_types
+    global onlyOverrides
 
     if module not in ["libvirt", "libvirt-qemu", "libvirt-lxc"]:
-        print "ERROR: Unknown module type: %s" % module
+        print("ERROR: Unknown module type: %s" % module)
         return None
 
     if module == "libvirt":
@@ -809,13 +886,14 @@ def buildStubs(module, api_xml):
         (parser, target)  = getparser()
         parser.feed(data)
         parser.close()
-    except IOError, msg:
-        print file, ":", msg
+    except IOError:
+        msg = sys.exc_info()[1]
+        print(file, ":", msg)
         sys.exit(1)
 
-    n = len(funcs.keys())
+    n = len(list(funcs.keys()))
     if not quiet:
-        print "Found %d functions in %s" % ((n), api_xml)
+        print("Found %d functions in %s" % ((n), api_xml))
 
     override_api_xml = "%s-override-api.xml" % module
     py_types['pythonObject'] = ('O', "pythonObject", "pythonObject", "pythonObject")
@@ -828,13 +906,14 @@ def buildStubs(module, api_xml):
         (parser, target)  = getparser()
         parser.feed(data)
         parser.close()
-    except IOError, msg:
-        print file, ":", msg
+    except IOError:
+        msg = sys.exc_info()[1]
+        print(file, ":", msg)
 
     if not quiet:
         # XXX: This is not right, same function already in @functions
         # will be overwritten.
-        print "Found %d functions in %s" % ((len(funcs.keys()) - n), override_api_xml)
+        print("Found %d functions in %s" % ((len(list(funcs.keys())) - n), override_api_xml))
     nb_wrap = 0
     failed = 0
     skipped = 0
@@ -844,10 +923,10 @@ def buildStubs(module, api_xml):
     wrapper_file = "build/%s.c" % module
 
     include = open(header_file, "w")
-    include.write("/* Generated */\n\n")
+    include.write("/* Generated by generator.py */\n\n")
 
     export = open(export_file, "w")
-    export.write("/* Generated */\n\n")
+    export.write("/* Generated by generator.py */\n\n")
 
     wrapper = open(wrapper_file, "w")
     wrapper.write("/* Generated by generator.py */\n\n")
@@ -856,7 +935,7 @@ def buildStubs(module, api_xml):
     wrapper.write("#include \"typewrappers.h\"\n")
     wrapper.write("#include \"build/" + module + ".h\"\n\n")
 
-    for function in funcs.keys():
+    for function in sorted(funcs.keys()):
         # Skip the functions which are not for the module
         ret = print_function_wrapper(module, function, wrapper, export, include)
         if ret < 0:
@@ -869,20 +948,30 @@ def buildStubs(module, api_xml):
             del funcs[function]
         if ret == 1:
             nb_wrap = nb_wrap + 1
+
+    if module == "libvirt":
+        # Write C pointer conversion functions.
+        for classname in primary_classes:
+            print_c_pointer(classname, wrapper, export, include)
+        # Write define wrappers around event id enums, so that the
+        # preprocessor can see which enums were available.
+        for event_id in event_ids:
+            include.write("#define %s %s\n" % (event_id, event_id))
+
     include.close()
     export.close()
     wrapper.close()
 
     if not quiet:
-        print "Generated %d wrapper functions" % nb_wrap
+        print("Generated %d wrapper functions" % nb_wrap)
 
     if unknown_types:
-        print "Missing type converters: "
-        for type in unknown_types.keys():
-            print "%s:%d " % (type, len(unknown_types[type])),
+        print("Missing type converters: ")
+        for type in list(unknown_types.keys()):
+            print("%s:%d " % (type, len(unknown_types[type])))
 
     for f in funcs_failed:
-        print "ERROR: failed %s" % f
+        print("ERROR: failed %s" % f)
 
     if failed > 0:
         return -1
@@ -1012,139 +1101,146 @@ def nameFixup(name, classe, type, file):
     l = len(classe)
     if name[0:l] == listname:
         func = name[l:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:16] == "virNetworkDefine":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:19] == "virNetworkCreateXML":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:16] == "virNetworkLookup":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:18] == "virInterfaceDefine":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:21] == "virInterfaceCreateXML":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:18] == "virInterfaceLookup":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:15] == "virSecretDefine":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:15] == "virSecretLookup":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:17] == "virNWFilterDefine":
         func = name[3:]
-        func = string.lower(func[0:3]) + func[3:]
+        func = func[0:3].lower() + func[3:]
     elif name[0:17] == "virNWFilterLookup":
         func = name[3:]
-        func = string.lower(func[0:3]) + func[3:]
+        func = func[0:3].lower() + func[3:]
     elif name[0:20] == "virStoragePoolDefine":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:23] == "virStoragePoolCreateXML":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:20] == "virStoragePoolLookup":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:19] == "virStorageVolDefine":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:19] == "virStorageVolLookup":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:20] == "virDomainGetCPUStats":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
+    elif name[0:24] == "virDomainGetIOThreadInfo":
+        func = name[12:]
+        func = func[0:2].lower() + func[2:]
+    elif name[0:18] == "virDomainGetFSInfo":
+        func = name[12:]
+        func = func[0:2].lower() + func[2:]
     elif name[0:12] == "virDomainGet":
         func = name[12:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:29] == "virDomainSnapshotLookupByName":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:26] == "virDomainSnapshotListNames":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:28] == "virDomainSnapshotNumChildren":
         func = name[17:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:20] == "virDomainSnapshotNum":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:26] == "virDomainSnapshotCreateXML":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:24] == "virDomainSnapshotCurrent":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:17] == "virDomainSnapshot":
         func = name[17:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:9] == "virDomain":
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:13] == "virNetworkGet":
         func = name[13:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
+        func = func.replace("dHCP", "DHCP")
     elif name[0:10] == "virNetwork":
         func = name[10:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:15] == "virInterfaceGet":
         func = name[15:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:12] == "virInterface":
         func = name[12:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:12] == 'virSecretGet':
         func = name[12:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:9] == 'virSecret':
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:14] == 'virNWFilterGet':
         func = name[14:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:11] == 'virNWFilter':
         func = name[11:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:12] == 'virStreamNew':
         func = "newStream"
     elif name[0:9] == 'virStream':
         func = name[9:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:17] == "virStoragePoolGet":
         func = name[17:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:14] == "virStoragePool":
         func = name[14:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:16] == "virStorageVolGet":
         func = name[16:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:13] == "virStorageVol":
         func = name[13:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:13] == "virNodeDevice":
         if name[13:16] == "Get":
-            func = string.lower(name[16]) + name[17:]
+            func = name[16].lower() + name[17:]
         elif name[13:19] == "Lookup" or name[13:19] == "Create":
-            func = string.lower(name[3]) + name[4:]
+            func = name[3].lower() + name[4:]
         else:
-            func = string.lower(name[13]) + name[14:]
+            func = name[13].lower() + name[14:]
     elif name[0:7] == "virNode":
         func = name[7:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:10] == "virConnect":
         func = name[10:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     elif name[0:3] == "xml":
         func = name[3:]
-        func = string.lower(func[0:1]) + func[1:]
+        func = func[0:1].lower() + func[1:]
     else:
         func = name
     if func == "iD":
@@ -1163,23 +1259,9 @@ def nameFixup(name, classe, type, file):
     return func
 
 
-def functionCompare(info1, info2):
-    (index1, func1, name1, ret1, args1, file1, mod1) = info1
-    (index2, func2, name2, ret2, args2, file2, mod2) = info2
-    if file1 == file2:
-        if func1 < func2:
-            return -1
-        if func1 > func2:
-            return 1
-    if file1 == "python_accessor":
-        return -1
-    if file2 == "python_accessor":
-        return 1
-    if file1 < file2:
-        return -1
-    if file1 > file2:
-        return 1
-    return 0
+def functionSortKey(info):
+    (index, func, name, ret, args, filename, mod) = info
+    return func, filename
 
 def writeDoc(module, name, args, indent, output):
      if module == "libvirt":
@@ -1191,15 +1273,15 @@ def writeDoc(module, name, args, indent, output):
      if funcs[name][0] is None or funcs[name][0] == "":
          return
      val = funcs[name][0]
-     val = string.replace(val, "NULL", "None")
+     val = val.replace("NULL", "None")
      output.write(indent)
      output.write('"""')
-     i = string.find(val, "\n")
+     i = val.find("\n")
      while i >= 0:
          str = val[0:i+1]
          val = val[i+1:]
          output.write(str)
-         i = string.find(val, "\n")
+         i = val.find("\n")
          output.write(indent)
      output.write(val)
      output.write(' """\n')
@@ -1220,10 +1302,10 @@ def buildWrappers(module):
     global functions_noexcept
 
     if not module == "libvirt":
-        print "ERROR: Unknown module type: %s" % module
+        print("ERROR: Unknown module type: %s" % module)
         return None
 
-    for type in classes_type.keys():
+    for type in list(classes_type.keys()):
         function_classes[classes_type[type][2]] = []
 
     #
@@ -1237,23 +1319,23 @@ def buildWrappers(module):
     for classe in primary_classes:
         classes_list.append(classe)
         classes_processed[classe] = ()
-        for type in classes_type.keys():
+        for type in list(classes_type.keys()):
             tinfo = classes_type[type]
             if tinfo[2] == classe:
                 ctypes.append(type)
                 ctypes_processed[type] = ()
-    for type in classes_type.keys():
-        if ctypes_processed.has_key(type):
+    for type in list(classes_type.keys()):
+        if type in ctypes_processed:
             continue
         tinfo = classes_type[type]
-        if not classes_processed.has_key(tinfo[2]):
+        if tinfo[2] not in classes_processed:
             classes_list.append(tinfo[2])
             classes_processed[tinfo[2]] = ()
 
         ctypes.append(type)
         ctypes_processed[type] = ()
 
-    for name in functions.keys():
+    for name in list(functions.keys()):
         found = 0
         (desc, ret, args, file, mod, cond) = functions[name]
         for type in ctypes:
@@ -1308,9 +1390,9 @@ def buildWrappers(module):
     if extra is not None:
         extra.close()
 
-    if function_classes.has_key("None"):
+    if "None" in function_classes:
         flist = function_classes["None"]
-        flist.sort(functionCompare)
+        flist.sort(key=functionSortKey)
         oldfile = ""
         for info in flist:
             (index, func, name, ret, args, file, mod) = info
@@ -1333,7 +1415,7 @@ def buildWrappers(module):
             writeDoc(module, name, args, '    ', classes)
 
             for arg in args:
-                if classes_type.has_key(arg[1]):
+                if arg[1] in classes_type:
                     classes.write("    if %s is None: %s__o = None\n" %
                                   (arg[0], arg[0]))
                     classes.write("    else: %s__o = %s%s\n" %
@@ -1348,17 +1430,17 @@ def buildWrappers(module):
                 if n != 0:
                     classes.write(", ")
                 classes.write("%s" % arg[0])
-                if classes_type.has_key(arg[1]):
+                if arg[1] in classes_type:
                     classes.write("__o")
                 n = n + 1
             classes.write(")\n")
 
             if ret[0] != "void":
-                if classes_type.has_key(ret[0]):
+                if ret[0] in classes_type:
                     #
                     # Raise an exception
                     #
-                    if functions_noexcept.has_key(name):
+                    if name in functions_noexcept:
                         classes.write("    if ret is None:return None\n")
                     else:
                         classes.write(
@@ -1373,8 +1455,8 @@ def buildWrappers(module):
                 # several things that we can do, depending on the
                 # contents of functions_int_*:
                 elif is_integral_type (ret[0]):
-                    if not functions_noexcept.has_key (name):
-                        if functions_int_exception_test.has_key (name):
+                    if name not in functions_noexcept:
+                        if name in functions_int_exception_test:
                             test = functions_int_exception_test[name]
                         else:
                             test = functions_int_default_test
@@ -1384,8 +1466,8 @@ def buildWrappers(module):
                     classes.write("    return ret\n")
 
                 elif is_python_noninteger_type (ret[0]):
-                    if not functions_noexcept.has_key (name):
-                        if functions_list_exception_test.has_key (name):
+                    if name not in functions_noexcept:
+                        if name in functions_list_exception_test:
                             test = functions_list_exception_test[name]
                         else:
                             test = functions_list_default_test
@@ -1403,11 +1485,11 @@ def buildWrappers(module):
         if classname == "None":
             pass
         else:
-            if classes_ancestor.has_key(classname):
+            if classname in classes_ancestor:
                 classes.write("class %s(%s):\n" % (classname,
                               classes_ancestor[classname]))
                 classes.write("    def __init__(self, _obj=None):\n")
-                if reference_keepers.has_key(classname):
+                if classname in reference_keepers:
                     rlist = reference_keepers[classname]
                     for ref in rlist:
                         classes.write("        self.%s = None\n" % ref[1])
@@ -1424,9 +1506,9 @@ def buildWrappers(module):
                     classes.write("    def __init__(self, dom, _obj=None):\n")
                 else:
                     classes.write("    def __init__(self, _obj=None):\n")
-                if reference_keepers.has_key(classname):
-                    list = reference_keepers[classname]
-                    for ref in list:
+                if classname in reference_keepers:
+                    rlist = reference_keepers[classname]
+                    for ref in rlist:
                         classes.write("        self.%s = None\n" % ref[1])
                 if classname in [ "virDomain", "virNetwork", "virInterface",
                                   "virNodeDevice", "virSecret", "virStream",
@@ -1441,7 +1523,7 @@ def buildWrappers(module):
                     classes.write("        self._conn = dom.connect()\n")
                 classes.write("        self._o = _obj\n\n")
             destruct=None
-            if classes_destructors.has_key(classname):
+            if classname in classes_destructors:
                 classes.write("    def __del__(self):\n")
                 classes.write("        if self._o is not None:\n")
                 classes.write("            libvirtmod.%s(self._o)\n" %
@@ -1449,17 +1531,22 @@ def buildWrappers(module):
                 classes.write("        self._o = None\n\n")
                 destruct=classes_destructors[classname]
 
-            if not class_skip_connect_impl.has_key(classname):
+            if classname not in class_skip_connect_impl:
                 # Build python safe 'connect' method
                 classes.write("    def connect(self):\n")
                 classes.write("        return self._conn\n\n")
 
-            if class_domain_impl.has_key(classname):
+            if classname in class_domain_impl:
                 classes.write("    def domain(self):\n")
                 classes.write("        return self._dom\n\n")
 
+            classes.write("    def c_pointer(self):\n")
+            classes.write("        \"\"\"Get C pointer to underlying object\"\"\"\n")
+            classes.write("        return libvirtmod.%s_pointer(self._o)\n\n" %
+                          classname)
+
             flist = function_classes[classname]
-            flist.sort(functionCompare)
+            flist.sort(key=functionSortKey)
             oldfile = ""
             for info in flist:
                 (index, func, name, ret, args, file, mod) = info
@@ -1493,7 +1580,7 @@ def buildWrappers(module):
                 writeDoc(module, name, args, '        ', classes)
                 n = 0
                 for arg in args:
-                    if classes_type.has_key(arg[1]):
+                    if arg[1] in classes_type:
                         if n != index:
                             classes.write("        if %s is None: %s__o = None\n" %
                                           (arg[0], arg[0]))
@@ -1511,11 +1598,11 @@ def buildWrappers(module):
                         classes.write(", ")
                     if n != index:
                         classes.write("%s" % arg[0])
-                        if classes_type.has_key(arg[1]):
+                        if arg[1] in classes_type:
                             classes.write("__o")
                     else:
                         classes.write("self")
-                        if classes_type.has_key(arg[1]):
+                        if arg[1] in classes_type:
                             classes.write(classes_type[arg[1]][0])
                     n = n + 1
                 classes.write(")\n")
@@ -1525,11 +1612,11 @@ def buildWrappers(module):
 
                 # For functions returning object types:
                 if ret[0] != "void":
-                    if classes_type.has_key(ret[0]):
+                    if ret[0] in classes_type:
                         #
                         # Raise an exception
                         #
-                        if functions_noexcept.has_key(name):
+                        if name in functions_noexcept:
                             classes.write(
                                 "        if ret is None:return None\n")
                         else:
@@ -1579,15 +1666,15 @@ def buildWrappers(module):
                         # See reference_keepers for the list
                         #
                         tclass = classes_type[ret[0]][2]
-                        if reference_keepers.has_key(tclass):
-                            list = reference_keepers[tclass]
-                            for pref in list:
+                        if tclass in reference_keepers:
+                            rlist = reference_keepers[tclass]
+                            for pref in rlist:
                                 if pref[0] == classname:
                                     classes.write("        __tmp.%s = self\n" %
                                                   pref[1])
 
                         # Post-processing - just before we return.
-                        if function_post.has_key(name):
+                        if name in function_post:
                             classes.write("        %s\n" %
                                           (function_post[name]))
 
@@ -1595,16 +1682,16 @@ def buildWrappers(module):
                         # return the class
                         #
                         classes.write("        return __tmp\n")
-                    elif converter_type.has_key(ret[0]):
+                    elif ret[0] in converter_type:
                         #
                         # Raise an exception
                         #
-                        if functions_noexcept.has_key(name):
+                        if name in functions_noexcept:
                             classes.write(
                                 "        if ret is None:return None")
 
                         # Post-processing - just before we return.
-                        if function_post.has_key(name):
+                        if name in function_post:
                             classes.write("        %s\n" %
                                           (function_post[name]))
 
@@ -1616,8 +1703,8 @@ def buildWrappers(module):
                     # are several things that we can do, depending on
                     # the contents of functions_int_*:
                     elif is_integral_type (ret[0]):
-                        if not functions_noexcept.has_key (name):
-                            if functions_int_exception_test.has_key (name):
+                        if name not in functions_noexcept:
+                            if name in functions_int_exception_test:
                                 test = functions_int_exception_test[name]
                             else:
                                 test = functions_int_default_test
@@ -1651,15 +1738,15 @@ def buildWrappers(module):
                                                ("ret", name))
 
                         # Post-processing - just before we return.
-                        if function_post.has_key(name):
+                        if name in function_post:
                             classes.write("        %s\n" %
                                           (function_post[name]))
 
                         classes.write ("        return ret\n")
 
                     elif is_python_noninteger_type (ret[0]):
-                        if not functions_noexcept.has_key (name):
-                            if functions_list_exception_test.has_key (name):
+                        if name not in functions_noexcept:
+                            if name in functions_list_exception_test:
                                 test = functions_list_exception_test[name]
                             else:
                                 test = functions_list_default_test
@@ -1693,7 +1780,7 @@ def buildWrappers(module):
                                                ("ret", name))
 
                         # Post-processing - just before we return.
-                        if function_post.has_key(name):
+                        if name in function_post:
                             classes.write("        %s\n" %
                                           (function_post[name]))
 
@@ -1701,7 +1788,7 @@ def buildWrappers(module):
 
                     else:
                         # Post-processing - just before we return.
-                        if function_post.has_key(name):
+                        if name in function_post:
                             classes.write("        %s\n" %
                                           (function_post[name]))
 
@@ -1710,11 +1797,51 @@ def buildWrappers(module):
                 classes.write("\n")
             # Append "<classname>.py" to class def, iff it exists
             try:
+                wantfuncs = []
                 extra = open("libvirt-override-" + classname + ".py", "r")
                 classes.write ("    #\n")
                 classes.write ("    # %s methods from %s.py (hand coded)\n" % (classname,classname))
                 classes.write ("    #\n")
-                classes.writelines(extra.readlines())
+                cached = None
+
+
+                # Since we compile with older libvirt, we don't want to pull
+                # in manually written python methods which call C methods
+                # that don't exist. This code attempts to detect which
+                # methods to skip by looking at the libvirtmod.XXXX calls
+
+                def shouldSkip(lines):
+                    for line in lines:
+                        offset = line.find("libvirtmod.")
+                        if offset != -1:
+                            func = line[offset + 11:]
+                            offset = func.find("(")
+                            func = func[0:offset]
+                            if func not in functions_skipped:
+                                return True
+                    return False
+
+                for line in extra.readlines():
+                    offset = line.find(" def ")
+                    if offset != -1:
+                        name = line[offset+5:]
+                        offset = name.find("(")
+                        name = name[0:offset]
+                        if cached is not None:
+                            if not shouldSkip(cached):
+                                classes.writelines(cached)
+                        if name == "__del__":
+                            cached = None
+                            classes.write(line)
+                        else:
+                            cached = [line]
+                    else:
+                        if cached is not None:
+                            cached.append(line)
+                        else:
+                            classes.write(line)
+                if not shouldSkip(cached):
+                    classes.writelines(cached)
                 classes.write("\n")
                 extra.close()
             except:
@@ -1723,13 +1850,44 @@ def buildWrappers(module):
     #
     # Generate enum constants
     #
-    for type,enum in enums.items():
+    def enumsSortKey(data):
+        value = data[1]
+        try:
+            value = int(value)
+        except ValueError:
+            value = float('inf')
+        return value, data[0]
+
+    # Resolve only one level of reference
+    def resolveEnum(enum, data):
+        for name,val in enum.items():
+            try:
+                int(val)
+            except ValueError:
+                enum[name] = data[val]
+        return enum
+
+    enumvals = list(enums.items())
+    # convert list of dicts to one dict
+    enumData = {}
+    for type,enum in enumvals:
+        enumData.update(enum)
+
+    if enumvals is not None:
+        enumvals.sort(key=lambda x: x[0])
+    for type,enum in enumvals:
         classes.write("# %s\n" % type)
-        items = enum.items()
-        items.sort(lambda i1,i2: cmp(long(i1[1]),long(i2[1])))
+        items = list(resolveEnum(enum, enumData).items())
+        items.sort(key=enumsSortKey)
+        if items[-1][0].endswith('_LAST'):
+            del items[-1]
         for name,value in items:
             classes.write("%s = %s\n" % (name,value))
         classes.write("\n")
+
+    classes.write("# typed parameter names\n")
+    for name, value in params:
+        classes.write("%s = \"%s\"\n" % (name, value))
 
     classes.close()
 
@@ -1737,7 +1895,7 @@ def qemuBuildWrappers(module):
     global qemu_functions
 
     if not module == "libvirt-qemu":
-        print "ERROR: only libvirt-qemu is supported"
+        print("ERROR: only libvirt-qemu is supported")
         return None
 
     extra_file = "%s-override.py" % module
@@ -1758,32 +1916,36 @@ def qemuBuildWrappers(module):
     fd.write("#\n")
     fd.write("# WARNING WARNING WARNING WARNING\n")
     fd.write("#\n")
-    if extra is not None:
-        fd.writelines(extra.readlines())
-    fd.write("#\n")
-    fd.write("# WARNING WARNING WARNING WARNING\n")
-    fd.write("#\n")
     fd.write("# Automatically written part of python bindings for libvirt\n")
     fd.write("#\n")
-    fd.write("# WARNING WARNING WARNING WARNING\n")
-    if extra is not None:
-        extra.close()
 
     fd.write("try:\n")
     fd.write("    import libvirtmod_qemu\n")
-    fd.write("except ImportError, lib_e:\n")
+    fd.write("except ImportError:\n")
+    fd.write("    lib_e = sys.exc_info()[1]\n")
     fd.write("    try:\n")
     fd.write("        import cygvirtmod_qemu as libvirtmod_qemu\n")
-    fd.write("    except ImportError, cyg_e:\n")
+    fd.write("    except ImportError:\n")
+    fd.write("        cyg_e = sys.exc_info()[1]\n")
     fd.write("        if str(cyg_e).count(\"No module named\"):\n")
     fd.write("            raise lib_e\n\n")
 
     fd.write("import libvirt\n\n")
+    fd.write("# WARNING WARNING WARNING WARNING\n")
+    fd.write("#\n")
+    if extra is not None:
+        fd.writelines(extra.readlines())
+    fd.write("#\n")
+    if extra is not None:
+        extra.close()
+
+    fd.write("# WARNING WARNING WARNING WARNING\n")
+    fd.write("#\n")
     fd.write("#\n# Functions from module %s\n#\n\n" % module)
     #
     # Generate functions directly, no classes
     #
-    for name in qemu_functions.keys():
+    for name in sorted(qemu_functions.keys()):
         func = nameFixup(name, 'None', None, None)
         (desc, ret, args, file, mod, cond) = qemu_functions[name]
         fd.write("def %s(" % func)
@@ -1833,10 +1995,10 @@ def qemuBuildWrappers(module):
     #
     # Generate enum constants
     #
-    for type,enum in qemu_enums.items():
+    for type,enum in sorted(qemu_enums.items()):
         fd.write("# %s\n" % type)
-        items = enum.items()
-        items.sort(lambda i1,i2: cmp(long(i1[1]),long(i2[1])))
+        items = list(enum.items())
+        items.sort(key=lambda i: (int(i[1]), i[0]))
         for name,value in items:
             fd.write("%s = %s\n" % (name,value))
         fd.write("\n")
@@ -1848,7 +2010,7 @@ def lxcBuildWrappers(module):
     global lxc_functions
 
     if not module == "libvirt-lxc":
-        print "ERROR: only libvirt-lxc is supported"
+        print("ERROR: only libvirt-lxc is supported")
         return None
 
     extra_file = "%s-override.py" % module
@@ -1882,10 +2044,12 @@ def lxcBuildWrappers(module):
 
     fd.write("try:\n")
     fd.write("    import libvirtmod_lxc\n")
-    fd.write("except ImportError, lib_e:\n")
+    fd.write("except ImportError:\n")
+    fd.write("    lib_e = sys.exc_info()[1]\n")
     fd.write("    try:\n")
     fd.write("        import cygvirtmod_lxc as libvirtmod_lxc\n")
-    fd.write("    except ImportError, cyg_e:\n")
+    fd.write("    except ImportError:\n")
+    fd.write("        cyg_e = sys.exc_info()[1]\n")
     fd.write("        if str(cyg_e).count(\"No module named\"):\n")
     fd.write("            raise lib_e\n\n")
 
@@ -1894,7 +2058,7 @@ def lxcBuildWrappers(module):
     #
     # Generate functions directly, no classes
     #
-    for name in lxc_functions.keys():
+    for name in sorted(lxc_functions.keys()):
         func = nameFixup(name, 'None', None, None)
         (desc, ret, args, file, mod, cond) = lxc_functions[name]
         fd.write("def %s(" % func)
@@ -1944,10 +2108,10 @@ def lxcBuildWrappers(module):
     #
     # Generate enum constants
     #
-    for type,enum in lxc_enums.items():
+    for type,enum in sorted(lxc_enums.items()):
         fd.write("# %s\n" % type)
-        items = enum.items()
-        items.sort(lambda i1,i2: cmp(long(i1[1]),long(i2[1])))
+        items = list(enum.items())
+        items.sort(key=lambda i: (int(i[1]), i[0]))
         for name,value in items:
             fd.write("%s = %s\n" % (name,value))
         fd.write("\n")
@@ -1969,7 +2133,7 @@ elif sys.argv[1] == "libvirt-lxc":
 elif sys.argv[1] == "libvirt-qemu":
     qemuBuildWrappers(sys.argv[1])
 else:
-    print "ERROR: unknown module %s" % sys.argv[1]
+    print("ERROR: unknown module %s" % sys.argv[1])
     sys.exit(1)
 
 sys.exit(0)
